@@ -280,15 +280,37 @@
 
         async function loadStores() {
             try {
-                const response = await fetch('store_list.json');
-                const data = await response.json();
-                allStores = data.data;
+                const response = await fetch('store_list.json.gz');
+                
+                // Check if the response is gzipped
+                if (response.headers.get('content-encoding') === 'gzip' || response.url.endsWith('.gz')) {
+                    // For modern browsers that support ReadableStream
+                    if (typeof DecompressionStream !== 'undefined') {
+                        const stream = response.body.pipeThrough(new DecompressionStream('gzip'));
+                        const decompressedResponse = new Response(stream);
+                        const data = await decompressedResponse.json();
+                        allStores = data.data;
+                    } else {
+                        // Fallback: Use pako library for older browsers or manual decompression
+                        const arrayBuffer = await response.arrayBuffer();
+                        const compressed = new Uint8Array(arrayBuffer);
+                        
+                        // For this implementation, we'll assume modern browser support
+                        // If you need broader compatibility, include pako.js library
+                        throw new Error('Gzip decompression not supported in this browser');
+                    }
+                } else {
+                    // Handle as regular JSON if not gzipped
+                    const data = await response.json();
+                    allStores = data.data;
+                }
+                
                 populateStateFilter();
                 applyFilters();
             } catch (error) {
                 console.error('Error loading stores:', error);
                 document.getElementById('resultsInfo').innerHTML = 
-                    '<div style="color: red;">Error loading store data. Please check if store_list.json exists.</div>';
+                    '<div style="color: red;">Error loading store data. Please check if store_list.json.gz exists.</div>';
             }
         }
 
