@@ -4,6 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MyKasih Store Locator</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
     <style>
         * {
             margin: 0;
@@ -214,14 +219,78 @@
             color: #666;
         }
 
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .left-panel {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .map-container {
+            height: 600px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        #map {
+            height: 100%;
+            width: 100%;
+        }
+
         @media (max-width: 768px) {
             .filter-row {
                 flex-direction: column;
             }
             
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
             .stores-grid {
                 grid-template-columns: 1fr;
             }
+
+            .map-container {
+                height: 400px;
+                order: -1;
+            }
+        }
+
+        /* Custom cluster styling */
+        .marker-cluster-small {
+            background-color: rgba(181, 226, 140, 0.6);
+            border: 2px solid rgba(110, 204, 57, 0.8);
+        }
+        .marker-cluster-small div {
+            background-color: rgba(110, 204, 57, 0.8);
+            color: white;
+            font-weight: bold;
+        }
+
+        .marker-cluster-medium {
+            background-color: rgba(241, 211, 87, 0.6);
+            border: 2px solid rgba(240, 194, 12, 0.8);
+        }
+        .marker-cluster-medium div {
+            background-color: rgba(240, 194, 12, 0.8);
+            color: white;
+            font-weight: bold;
+        }
+
+        .marker-cluster-large {
+            background-color: rgba(253, 156, 115, 0.6);
+            border: 2px solid rgba(241, 128, 23, 0.8);
+        }
+        .marker-cluster-large div {
+            background-color: rgba(241, 128, 23, 0.8);
+            color: white;
+            font-weight: bold;
         }
     </style>
 </head>
@@ -269,7 +338,14 @@
             <div class="loading">Loading stores...</div>
         </div>
 
-        <div class="stores-grid" id="storesGrid"></div>
+        <div class="main-content">
+            <div class="left-panel">
+                <div class="stores-grid" id="storesGrid"></div>
+            </div>
+            <div class="map-container">
+                <div id="map"></div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -277,6 +353,9 @@
         let filteredStores = [];
         let userLocation = null;
         let sortedByDistance = false;
+        let map;
+        let markersClusterGroup;
+        let filterTimeout;
 
         async function loadStores() {
             try {
@@ -305,6 +384,7 @@
                     allStores = data.data;
                 }
                 
+                initializeMap();
                 populateStateFilter();
                 applyFilters();
             } catch (error) {
@@ -352,27 +432,36 @@
         }
 
         function applyFilters() {
-            const stateFilter = document.getElementById('stateFilter').value;
-            const cityFilter = document.getElementById('cityFilter').value;
-            const nameFilter = document.getElementById('nameFilter').value.toLowerCase();
-            const addressFilter = document.getElementById('addressFilter').value.toLowerCase();
+            // Clear previous timeout
+            if (filterTimeout) {
+                clearTimeout(filterTimeout);
+            }
+            
+            // Debounce filter updates for text inputs
+            filterTimeout = setTimeout(() => {
+                const stateFilter = document.getElementById('stateFilter').value;
+                const cityFilter = document.getElementById('cityFilter').value;
+                const nameFilter = document.getElementById('nameFilter').value.toLowerCase();
+                const addressFilter = document.getElementById('addressFilter').value.toLowerCase();
 
-            filteredStores = allStores.filter(store => {
-                const stateMatch = !stateFilter || store.state === stateFilter;
-                const cityMatch = !cityFilter || store.city === cityFilter;
-                const nameMatch = !nameFilter || store.tradingName.toLowerCase().includes(nameFilter);
-                
-                const fullAddress = [store.address1, store.address2, store.address3]
-                    .filter(addr => addr)
-                    .join(' ')
-                    .toLowerCase();
-                const addressMatch = !addressFilter || fullAddress.includes(addressFilter);
-                
-                return stateMatch && cityMatch && nameMatch && addressMatch;
-            });
+                filteredStores = allStores.filter(store => {
+                    const stateMatch = !stateFilter || store.state === stateFilter;
+                    const cityMatch = !cityFilter || store.city === cityFilter;
+                    const nameMatch = !nameFilter || store.tradingName.toLowerCase().includes(nameFilter);
+                    
+                    const fullAddress = [store.address1, store.address2, store.address3]
+                        .filter(addr => addr)
+                        .join(' ')
+                        .toLowerCase();
+                    const addressMatch = !addressFilter || fullAddress.includes(addressFilter);
+                    
+                    return stateMatch && cityMatch && nameMatch && addressMatch;
+                });
 
-            displayStores();
-            updateResultsInfo();
+                displayStores();
+                updateResultsInfo();
+                updateMapMarkers();
+            }, 150); // 150ms debounce
         }
 
         function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -412,6 +501,11 @@
                     document.getElementById('findNearestBtn').disabled = false;
                     document.getElementById('sortDistanceBtn').disabled = false;
                     document.getElementById('locationStatus').textContent = 'Location found! You can now sort by distance.';
+                    
+                    // Zoom map to user location
+                    if (map) {
+                        map.setView([userLocation.lat, userLocation.lon], 18);
+                    }
                     
                     sortByDistance();
                 },
@@ -458,7 +552,10 @@
                 storesToDisplay.sort((a, b) => a.distance - b.distance);
             }
 
-            storesGrid.innerHTML = storesToDisplay.map((store, index) => {
+            // Use DocumentFragment for better performance
+            const fragment = document.createDocumentFragment();
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = storesToDisplay.map((store, index) => {
                 const address = [store.address1, store.address2, store.address3]
                     .filter(addr => addr)
                     .join(', ');
@@ -472,7 +569,7 @@
                     : '';
                     
                 return `
-                    <div class="store-card">
+                    <div class="store-card" onclick="centerMapOnStore(${store.latitude}, ${store.longitude})">
                         ${nearestBadge}
                         <div class="store-name">${store.tradingName}</div>
                         <div class="store-address">${address}</div>
@@ -482,6 +579,14 @@
                     </div>
                 `;
             }).join('');
+            
+            // Move all elements to fragment then update DOM once
+            while (tempDiv.firstChild) {
+                fragment.appendChild(tempDiv.firstChild);
+            }
+            
+            storesGrid.innerHTML = '';
+            storesGrid.appendChild(fragment);
         }
 
         function updateResultsInfo() {
@@ -493,12 +598,113 @@
             const selectedState = this.value;
             populateCityFilter(selectedState);
             document.getElementById('cityFilter').value = '';
+            // Clear timeout and apply immediately for dropdown changes
+            if (filterTimeout) clearTimeout(filterTimeout);
             applyFilters();
         });
 
-        document.getElementById('cityFilter').addEventListener('change', applyFilters);
+        document.getElementById('cityFilter').addEventListener('change', function() {
+            // Clear timeout and apply immediately for dropdown changes
+            if (filterTimeout) clearTimeout(filterTimeout);
+            applyFilters();
+        });
+        
         document.getElementById('nameFilter').addEventListener('input', applyFilters);
         document.getElementById('addressFilter').addEventListener('input', applyFilters);
+
+        function initializeMap() {
+            // Center on Kuala Lumpur with zoom level for ~20km width
+            map = L.map('map').setView([3.1390, 101.6869], 15);
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+            
+            // Create marker cluster group with custom options
+            markersClusterGroup = L.markerClusterGroup({
+                chunkedLoading: true,
+                chunkInterval: 200,
+                chunkDelay: 50,
+                maxClusterRadius: 80,
+                spiderfyOnMaxZoom: true,
+                showCoverageOnHover: false,
+                zoomToBoundsOnClick: true
+            }).addTo(map);
+        }
+
+        function updateMapMarkers() {
+            if (!map || !markersClusterGroup) return;
+            
+            // Use requestAnimationFrame for smoother UI updates
+            requestAnimationFrame(() => {
+                markersClusterGroup.clearLayers();
+            
+            // Auto zoom to first result if there are filtered stores
+            if (filteredStores.length > 0) {
+                let storesToDisplay = [...filteredStores];
+                
+                // Sort by distance if enabled
+                if (sortedByDistance && userLocation) {
+                    storesToDisplay.sort((a, b) => a.distance - b.distance);
+                }
+                
+                const firstStore = storesToDisplay[0];
+                map.setView([firstStore.latitude, firstStore.longitude], 18);
+            }
+            
+            // Apply same sorting for markers
+            let storesToDisplay = [...filteredStores];
+            if (sortedByDistance && userLocation) {
+                storesToDisplay.sort((a, b) => a.distance - b.distance);
+            }
+            
+            // Show ALL filtered markers - clustering will handle performance
+            storesToDisplay.forEach((store, index) => {
+                const marker = L.marker([store.latitude, store.longitude])
+                    .bindPopup(`
+                        <div style="max-width: 200px;">
+                            <strong>${store.tradingName}</strong><br>
+                            ${[store.address1, store.address2, store.address3].filter(addr => addr).join(', ')}<br>
+                            ${store.city}, ${store.state}<br>
+                            ${store.postalCode}
+                            ${store.distance !== undefined ? `<br><strong>${store.distance.toFixed(2)} km away</strong>` : ''}
+                        </div>
+                    `)
+                    .on('click', function() {
+                        // Highlight the corresponding store card without scrolling
+                        const storeCards = document.querySelectorAll('.store-card');
+                        const storeCard = storeCards[index];
+                        if (storeCard) {
+                            storeCard.style.transform = 'translateY(-2px)';
+                            storeCard.style.boxShadow = '0 4px 20px rgba(0,0,0,0.15)';
+                            setTimeout(() => {
+                                storeCard.style.transform = '';
+                                storeCard.style.boxShadow = '';
+                            }, 2000);
+                        }
+                    });
+                
+                if (sortedByDistance && index === 0 && store.distance !== undefined) {
+                    marker.setIcon(L.icon({
+                        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+                        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                        iconSize: [25, 41],
+                        iconAnchor: [12, 41],
+                        popupAnchor: [1, -34],
+                        shadowSize: [41, 41]
+                    }));
+                }
+                
+                markersClusterGroup.addLayer(marker);
+            });
+            });
+        }
+
+        function centerMapOnStore(latitude, longitude) {
+            if (map) {
+                map.setView([latitude, longitude], 18);
+            }
+        }
 
         loadStores();
     </script>
